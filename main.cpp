@@ -1,188 +1,108 @@
-#include <cfloat>
-#include <chrono>
-#include <fstream>
-#include <functional>
-#include <future>
-#include <iomanip>
+#include <GLFW/glfw3.h>
 #include <iostream>
-#include <sstream>
-#include <thread>
-
+#include <vector>
 #include "Camera.h"
-#include "Dielectric.h"
-#include "Lambertian.h"
-#include "Metal.h"
-#include "PNGMaster.h"
-#include "Ray.h"
 #include "Scene.h"
 #include "Sphere.h"
+#include "Lambertian.h"
 #include "Vector3.h"
+#include <cfloat>
 
-void render();
-
-Vector3 color(const Ray&, const Scene&, int);
-
-void cal_color(const int&, const int&);
-void cal_row_color(const int&);
-
+Vector3 color(const Ray& _r, const Scene& _s, int _d);
 void random_scene();
 
+// Global resolution (low for CPU real-time)
+unsigned int width = 384; 
 unsigned int height = 216;
-unsigned int width = 384;
-int ray_num = 10;
-Scene tmp_scene;
+int ray_num = 1; // 1 sample per pixel for movement
 
-Vector3 look_from(13, 2, 0);
+Scene tmp_scene;
+Vector3 look_from(13, 2, 3);
 Vector3 look_at(0, 0, 0);
-float focus_dis = (look_from - look_at).length();
-Camera tmp_camera(look_from, look_at, Vector3(0, 1, 0), 30, float(width) / float(height), 0.1, focus_dis, 0, 0);
-PNGMaster tmp_pic(height, width);
+float vfov = 30.0;
+float aperture = 0.1;
+
+// Global Camera instance
+Camera tmp_camera(look_from, look_at, Vector3(0, 1, 0), vfov, float(width) / float(height), aperture, (look_from - look_at).length(), 0, 0);
+
+unsigned char* pixel_buffer = new unsigned char[width * height * 3];
+
+void process_input(GLFWwindow* window) {
+    float speed = 0.1f;
+    bool moved = false;
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) { look_from += Vector3(0, 0, -speed); moved = true; }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) { look_from += Vector3(0, 0, speed); moved = true; }
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) { look_from += Vector3(-speed, 0, 0); moved = true; }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) { look_from += Vector3(speed, 0, 0); moved = true; }
+
+    if (moved) {
+        // Update the existing camera with new coordinates
+        tmp_camera = Camera(look_from, look_at, Vector3(0, 1, 0), vfov, float(width) / float(height), aperture, (look_from - look_at).length(), 0, 0);
+    }
+}
+
+void update_buffer() {
+    for (int i = 0; i < height; ++i) {
+        for (int j = 0; j < width; ++j) {
+            Vector3 tmp_color(0,0,0);
+            double u = float(j + ((double)rand() / (RAND_MAX))) / float(width);
+            double v = float(i + ((double)rand() / (RAND_MAX))) / float(height);
+            
+            Ray tmp_ray = tmp_camera.gen_ray(u, v);
+            tmp_color = color(tmp_ray, tmp_scene, 0); 
+
+            int r = int(255.99 * sqrt(tmp_color.r()));
+            int g = int(255.99 * sqrt(tmp_color.g()));
+            int b = int(255.99 * sqrt(tmp_color.b()));
+
+            // // OpenGL texture coordinate adjustment (bottom-to-top)
+            // int index = ((height - 1 - i) * width + j) * 3;
+            int index = (i * width + j) * 3;
+            pixel_buffer[index]     = (unsigned char)std::min(255, r);
+            pixel_buffer[index + 1] = (unsigned char)std::min(255, g);
+            pixel_buffer[index + 2] = (unsigned char)std::min(255, b);
+        }
+    }
+}
 
 int main() {
-    std::cout << "Rendering : " << width << " - " << height << std::endl;
-    render();
-    return 0;
-}
-
-void random_scene() {
-    tmp_scene.addObject(new Sphere(Vector3(0, -1000, 0), 1000, new Lambertian(Vector3(0.5, 0.5, 0.5))));
-    Vector3 center(5, 0.6, 0);
-    auto* center_sphere = new Sphere(center, 0.5, new Lambertian(Vector3(((double)rand() / (RAND_MAX)) * ((double)rand() / (RAND_MAX)), ((double)rand() / (RAND_MAX)) * ((double)rand() / (RAND_MAX)), ((double)rand() / (RAND_MAX)) * ((double)rand() / (RAND_MAX)))));
-    tmp_scene.addObject(center_sphere);
-    // test your metal material by uncommenting the follow code
-    // auto* metal_sphere_0 = new Sphere(Vector3(5, 0.6, -1), 0.5, new Metal(Vector3(((double)rand() / (RAND_MAX)), ((double)rand() / (RAND_MAX)), ((double)rand() / (RAND_MAX))), 0.1));
-    // tmp_scene.addObject(metal_sphere_0);
-
-    // auto* metal_sphere_1 = new Sphere(Vector3(5, 0.6, 1), 0.5, new Metal(Vector3(((double)rand() / (RAND_MAX)), ((double)rand() / (RAND_MAX)), ((double)rand() / (RAND_MAX))), 1.0));
-    // tmp_scene.addObject(metal_sphere_1);
-    //     Extra Points: test your dielectric material by uncommenting the following code
-    // auto* dielectric_sphere_0 = new Sphere(Vector3(5.5, 0.0, 0), 1, new Dielectric(1.5));
-    // tmp_scene.addObject(dielectric_sphere_0);
-}
-
-void render() {
+    if (!glfwInit()) return -1;
+    GLFWwindow* window = glfwCreateWindow(width, height, "RAT-TRAP! Real-Time Acoustic Debugger", NULL, NULL);
+    glfwMakeContextCurrent(window);
+    
     random_scene();
 
-    auto start = std::chrono::system_clock::now();
-    auto end = std::chrono::system_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    for (int i = 0; i < height; ++i) {
-        if (i % 2 == 0) {
-            cout << flush << '\r';
-            printf("%.2lf%%", (i + 1) * 100.0 / height);
-            end = std::chrono::system_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-            printf("\t%.2f min", (double)duration.count() / std::chrono::microseconds::period::den / 60);
-            printf("\tEstimated Time : %.2f min", (double)(height - i) / i * (double)duration.count() / std::chrono::microseconds::period::den / 60);
-        }
-        for (int j = 0; j < (int)width; ++j) {
-            cal_color(i, j);
-        }
+    GLuint texID;
+    glGenTextures(1, &texID);
+    glBindTexture(GL_TEXTURE_2D, texID);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    while (!glfwWindowShouldClose(window)) {
+        process_input(window);
+        update_buffer();
+
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, pixel_buffer);
+        
+        glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_TEXTURE_2D);
+        glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(-1, -1);
+            glTexCoord2f(1, 0); glVertex2f(1, -1);
+            glTexCoord2f(1, 1); glVertex2f(1, 1);
+            glTexCoord2f(0, 1); glVertex2f(-1, 1);
+        glEnd();
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
     }
-    // To control async threads and their results
-    //
-    // Create 10 async threads
-    //    std::vector<std::future<void>> works(height );
-    //
-    //    for (int i = 0; i < height; ++ i){
-    //            works[i] = std::async(std::launch::async,cal_row_color,i);
-    //    }
-    //    std::vector<std::future<void>> works(height *width);
-    //    for (int i = 0; i < height; ++i) {
-    //        works[i] = std::async(std::launch::async, [i]() {
-    //            for (int j = 0; j < (int) width; ++j) {
-    //                cal_color(j, i);
-    //            }
-    //        });
-    //    }
-    //
-    //    while (!works.empty()) {
-    //        // print info
-    //        cout << flush << '\r';
-    //        end = std::chrono::system_clock::now();
-    //        duration =
-    //                std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    //        printf("%.2f min", (double) duration.count() /
-    //                           std::chrono::microseconds::period::den / 60);
-    //        std::cout << "\tThreads completed: " << height - works.size() << flush;
-    //        auto time1 = std::chrono::system_clock::now();
-    //
-    //        // remove completed threads
-    //        works.erase(std::remove_if(works.begin(), works.end(), [](const std::future<void> &f) {
-    //            return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-    //        }), works.end());
-    //        // c++20 or later
-    //        // std::erase_if(works, [](const std::future<void> &f) {
-    //        //   return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-    //        // });
-    //
-    //        // sleep for 0.5 second
-    ////        using namespace std::chrono_literals;
-    ////        auto time2 = std::chrono::system_clock::now();
-    ////        auto dt =
-    ////                std::chrono::duration_cast<std::chrono::milliseconds>(time2 - time1);
-    ////        auto sleep_time = 500ms - dt;
-    ////        if (sleep_time > 0ms) {
-    ////            std::this_thread::sleep_for(sleep_time);
-    ////        }
-    //    }
-    std::cout << std::endl;
-
-    std::cout << "Generating Picture: " << width << "*" << height << endl;
-    auto t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::stringstream ss;
-    ss << std::put_time(std::localtime(&t), "%F %T");
-    std::string tmp_str = ss.str();
-
-    char tmp_name[100];
-
-    strcpy(tmp_name, tmp_str.c_str());
-    strcat(tmp_name, "test.png");
-
-    end = std::chrono::system_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    std::cout << flush << '\r' << "Render Completed - Time Consumed :" << (double)duration.count() / std::chrono::microseconds::period::den / 60 << "min" << endl;
-    tmp_pic.genPNG(tmp_name);
-}
-
-void cal_color(const int& _i, const int& _j) {
-    Vector3 tmp_color;
-    for (int k = 0; k < ray_num; ++k) {
-        double u = float(_j + ((double)rand() / (RAND_MAX))) / float(width);
-        double v = float(_i + ((double)rand() / (RAND_MAX))) / float(height);
-        Ray tmp_ray = tmp_camera.gen_ray(u, v);
-        tmp_color += color(tmp_ray, tmp_scene, 0);
-        ;
-    }
-    tmp_color /= ray_num;
-    tmp_color = Vector3(sqrt(tmp_color.r()), sqrt(tmp_color.g()),
-                        sqrt(tmp_color.b()));  // gamma corrected with gamma 2
-    tmp_color *= 255.99;
-    tmp_pic.setPixel(_j, _i, int(tmp_color.r()), int(tmp_color.g()), int(tmp_color.b()));
-    //    return tmp_color;
-}
-void cal_row_color(const int& _i) {
-    Vector3 tmp_color;
-    for (int j = 0; j < width; ++j) {
-        for (int k = 0; k < ray_num; ++k) {
-            double u = float(j + ((double)rand() / (RAND_MAX))) / float(width);
-            double v = float(_i + ((double)rand() / (RAND_MAX))) / float(height);
-            Ray tmp_ray = tmp_camera.gen_ray(u, v);
-            tmp_color += color(tmp_ray, tmp_scene, 0);
-            ;
-        }
-        tmp_color /= ray_num;
-        tmp_color = Vector3(sqrt(tmp_color.r()), sqrt(tmp_color.g()),
-                            sqrt(tmp_color.b()));  // gamma corrected with gamma 2
-        tmp_color *= 255.99;
-        tmp_pic.setPixel(j, _i, int(tmp_color.r()), int(tmp_color.g()), int(tmp_color.b()));
-        //    return tmp_color;
-    }
+    glfwTerminate();
+    return 0;
 }
 
 Vector3 color(const Ray& _r, const Scene& _s, int _d) {
     HitInfo tmp_info;
-    if (_s.hit(_r, 0.001, DBL_MAX, tmp_info)) {  // if hit object
+    if (_s.hit(_r, 0.001, DBL_MAX, tmp_info)) {
         Ray scatter_ray;
         Vector3 attenuation_vec;
         if (_d < 20 && tmp_info.material_ptr->scatter(_r, tmp_info, attenuation_vec, scatter_ray)) {
@@ -195,4 +115,10 @@ Vector3 color(const Ray& _r, const Scene& _s, int _d) {
         double t = 0.5 * (unit_vec.y() + 1.0);
         return (1.0 - t) * Vector3(1, 1, 1) + t * Vector3(0.5, 0.7, 1.0);
     }
+}
+
+void random_scene() {
+    tmp_scene.addObject(new Sphere(Vector3(0, -1000, 0), 1000, new Lambertian(Vector3(0.5, 0.5, 0.5))));
+    tmp_scene.addObject(new Sphere(Vector3(5, 0.6, 0), 0.5, new Lambertian(Vector3(0.8, 0.3, 0.3))));
+    // ... add any other spheres you want here ...
 }

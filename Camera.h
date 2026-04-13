@@ -37,6 +37,10 @@ public:
            const double &_duration_end);
 
     Ray gen_ray(double, double);
+    
+    void update_position(Vector3 new_origin, Vector3 new_lookat) {
+        origin = new_origin;
+    }
 };
 
 
